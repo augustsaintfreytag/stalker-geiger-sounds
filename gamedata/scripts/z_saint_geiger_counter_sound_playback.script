@@ -1,0 +1,103 @@
+-- State
+
+local volume = 1
+local num_sounds = 16
+local index_spread = 5
+
+local enable_alarm = true
+local alarm_time = 0
+local alarm_cooldown = 60000
+
+-- Main Hook
+
+if not arszi_radiation then
+	return
+end
+
+function arszi_radiation.play_random_geiger_sound()
+	local time = time_global()
+	local power = arszi_radiation.get_environmental_radiation_power()
+	local power_fraction = clamp(power / 0.07, 0, 1)
+
+	local median_index = median_index_from_power_fraction(power_fraction)
+	local min_index, max_index = index_selection_range_from_median_index(median_index)
+	local index = math.random(min_index, max_index)
+
+	printf("SGCS - Playing geiger sound with index: " ..
+		index ..
+		", power: " ..
+		power ..
+		", power fraction: " ..
+		power_fraction .. ", randomly selected from min: " .. min_index .. ", max: " .. max_index .. ".")
+
+	local sound_ref = xr_sound.get_safe_sound_object("detectors\\geiger_" .. index)
+
+	sound_ref:play(db.actor, 0, sound_object.s2d)
+	sound_ref.volume = volume
+
+	if enable_alarm and power > 0.07 and math.random() > 0.5 and time > alarm_time + alarm_cooldown then
+		local alarm_sound_ref = xr_sound.get_safe_sound_object("detectors\\geiger_alarm_1")
+
+		alarm_sound_ref:play(db.actor, 0, sound_object.s2d)
+		alarm_sound_ref.volume = volume
+
+		alarm_time = time
+	end
+end
+
+-- Utility
+
+function index_selection_range_from_median_index(input)
+	-- Calculate half of the spread
+	local half_spread = math.floor(index_spread / 2)
+
+	-- Calculate min and max values
+	local min_val = math.max(1, input - half_spread)
+	local max_val = math.min(num_sounds, input + half_spread)
+
+	-- Adjust the min or max if the spread is less than required due to boundaries
+	if (max_val - min_val + 1) < index_spread then
+		if min_val == 1 then
+			max_val = math.min(num_sounds, min_val + index_spread - 1)
+		else
+			min_val = math.max(1, max_val - index_spread + 1)
+		end
+	end
+
+	return min_val, max_val
+end
+
+function median_index_from_power_fraction(r)
+	local L = num_sounds
+	local k = 10
+	local r0 = 0.5
+
+	return round(L / (1 + math.exp(-k * (r - r0))))
+end
+
+-- State & Hooks
+
+local original_load_state = arszi_radiation.load_state
+local original_dosimeter_volume_up = arszi_radiation.dosimeterVolumeUp
+local original_dosimeter_volume_down = arszi_radiation.dosimeterVolumeDown
+
+function arszi_radiation.load_state(m_data)
+	original_load_state(m_data)
+	volume = m_data and m_data.radiation_table and m_data.radiation_table.dosimeter_volume or 1
+
+	printf("SGCS - Loading dosimeter volume: " .. volume .. ".")
+end
+
+function arszi_radiation.dosimeterVolumeUp()
+	original_dosimeter_volume_up()
+	volume = clamp(volume + 0.2, 0, 2)
+
+	printf("SGCS - Increasing dosimeter volume: " .. volume .. ".")
+end
+
+function arszi_radiation.dosimeterVolumeDown()
+	original_dosimeter_volume_down()
+	volume = clamp(volume - 0.2, 0, 2)
+
+	printf("SGCS - Decreasing dosimeter volume: " .. volume .. ".")
+end
